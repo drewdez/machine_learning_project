@@ -1,0 +1,166 @@
+Predicting Barbell Technique from Accelerometer Data
+========================================================
+
+## Executive Summary
+
+This report describes the development, evaluation, and application of a machine
+learning model to predict barbell lifting techniques based on accelerometer data
+from a study on *Qualitative Activity Recognition of Weight Lifting Exercises*
+(more details [here](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201)).
+
+The final model selected is a random forest model based on 52 features of the
+original data set. The model is able predict the training and test set
+techniques with 100% accuracy, and has an expected out-of-sample error rate of
+0.44%.
+
+## Data Preparation
+
+First, I load the Caret package.
+
+```{r caret-load}
+library(caret)
+```
+
+I then read the training and test data sets into R, and perform some
+pre-processing on the training set. Specifically, I removed all features that
+have NA or missing values, or do not appear to be direct readings from activity
+sensors. This results in a data frame with 53 variables, which I used for model
+training.
+
+```{r data-prep, cache=TRUE}
+trainRaw <- read.csv('data/pml-training.csv',
+                     na.strings = c("", "NA", "#DIV/0!"))
+test <- read.csv('data/pml-testing.csv',
+                 na.strings = c("", "NA", "#DIV/0!"))
+naCounts <- apply(trainRaw, 2, function(x) {sum(is.na(x))})
+removeCols <- c('X', 'user_name', 'raw_timestamp_part_1',
+                'raw_timestamp_part_2', 'cvtd_timestamp',
+                'new_window', 'num_window')
+keepCols <- setdiff(names(naCounts[naCounts == 0]), removeCols)
+train <- trainRaw[, keepCols]
+```
+
+## Model Development
+
+Given the large number of variables in the resulting data set and the five-level
+factor nature of the outcome, I limited the set of possible model-building
+methods to a few that include built-in feature selection and can handle
+predicting factor outcomes with more than two levels. I built a model
+using each of the following three methods:
+
+* Tree (using rpart)
+* Random Forest (using randomForest)
+* Boosting (using gbm)
+
+Within each model, I chose to use 4-fold cross-validation. This was done in
+order to perform a sufficient amount of cross-validation, while maintaining a
+reasonable processing time.
+
+The development and evaluation of each model is discussed below.
+
+### Tree Model
+
+Using the Caret package, I fit a tree model to the training set, use the model
+to predict training set outcomes, and display the associated Confusion Matrix
+and various statistics below.
+
+```{r tree-model, cache=TRUE}
+set.seed(1212)
+mod_tree <- train(classe ~ ., data = train, method = 'rpart',
+                  trControl = trainControl(method = 'cv', number = 4))
+prTrainMod_tree <- predict(mod_tree, train)
+confusionMatrix(prTrainMod_tree, train$classe)
+acc_tree = confusionMatrix(prTrainMod_tree, train$classe)$overall[1]
+```
+
+While the estimation of the tree model is extremely quick, we can see from the
+output of the confusionMatrix function that the accuracy is only
+`r round(acc_tree, 3)`. This will clearly not be sufficient to predict the
+techniques in the test set with a reasonable degree of reliability.
+
+### Random Forest Model
+
+Using the Caret package, I fit a random forest model to the training set, use
+the model to predict training set outcomes, and display the associated Confusion
+Matrix and various statistics below.
+
+```{r rf-model, cache=TRUE}
+set.seed(465)
+mod_rf <- train(classe ~ ., data = train, method = 'rf',
+                trControl = trainControl(method = 'cv', number = 4))
+prTrainMod_rf <- predict(mod_rf, train)
+confusionMatrix(prTrainMod_rf, train$classe)
+acc_rf = confusionMatrix(prTrainMod_rf, train$classe)$overall[1]
+```
+
+In contrast with the tree model above, the random forest model takes
+significantly longer to estimate, but is able to provide 100% accuracy
+predicting on the training set.
+
+### Boosting Model
+
+Using the Caret package, I fit a boosting model to the training set, use the
+model to predict training set outcomes, and display the associated Confusion
+Matrix and various statistics below.
+
+```{r boosting-model, cache=TRUE}
+set.seed(8992)
+mod_boost <- train(classe ~ ., data = train, method = 'gbm', verbose = FALSE,
+              trControl = trainControl(method = 'cv', number = 4))
+prTrainMod_boost <- predict(mod_boost, train)
+confusionMatrix(prTrainMod_boost, train$classe)
+acc_boost = confusionMatrix(prTrainMod_boost, train$classe)$overall[1]
+```
+
+The boosting model provides a level of training set prediction accuracy
+(`r round(acc_boost, 3)`) much higher than the tree model, but obviously lower
+than that of the random forest model.
+
+## Final Model Selection and Evaluation
+
+Due to the superior level of accuracy, and its comparable estimation time to
+that of the boosting model, I chose to examine the random forest model in more
+detail, with the intent to use it as my final model barring any fatal flaws.
+
+First, I retrieve the estimated out-of-sample error rate from the model object.
+
+```{r oos-error}
+oos_error <- mod_rf$finalModel$err.rate[nrow(mod_rf$finalModel$err.rate), "OOB"]
+```
+
+The out-of-sample error rate is a quite satisfactory
+`r round(oos_error, 5)`%.
+
+Next, I check to see which variables have the most importance, and create a
+plot.
+
+```{r var-imp, fig.height=4}
+rfImp <- varImp(mod_rf)
+plot(rfImp, top = 20)
+```
+
+Since it's difficult to visually examine data with this many features, I
+visualize the data based on technique and the two most important variables
+determined above: roll_belt and pitch_forearm. Roll_belt and pitch_forearm are
+plotted on the x and y axes, respectively, while the color of the points
+indicates the lifting technique.
+
+```{r plot-classes, fig.height=4}
+p <- qplot(roll_belt, pitch_forearm, col = classe, data = train)
+print(p)
+```
+
+Looking at the plot, there clearly is a high degree of clustering, even when
+using only two predictors.
+
+## Test Set Prediction
+
+Seeing no reason not to use the random forest model, I use it to predict barbell
+technique on the test set.
+
+```{r test-predict}
+predict(mod_rf, test)
+```
+
+The model was able to successfully predict the technique for each of the twenty
+test set observations.
